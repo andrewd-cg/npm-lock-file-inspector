@@ -932,8 +932,8 @@ function renderStats() {
       <div class="stat-item"><div class="stat-value">${entries.length.toLocaleString()}</div><div class="stat-label">Packages</div></div>
       <div class="stat-item"><div class="stat-value blue">${withUrl.toLocaleString()}</div><div class="stat-label">With Resolved URL</div></div>
       <div class="stat-item"><div class="stat-value purple">${withLic.toLocaleString()}</div><div class="stat-label">With License</div></div>
-      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()}</div><div class="stat-label">CGR Secured</div></div>
-      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()}</div><div class="stat-label">CGR Upstream</div></div>
+      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()}</div><div class="stat-label">CG Secured</div></div>
+      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()}</div><div class="stat-label">CG Upstream</div></div>
       <div class="stat-item"><div class="stat-value">${state.fileA.parsed.lockfileVersion}</div><div class="stat-label">Lockfile Version</div></div>`;
   } else {
     const c = state.comparison;
@@ -947,8 +947,8 @@ function renderStats() {
       <div class="stat-item"><div class="stat-value blue">${c.same.length.toLocaleString()}</div><div class="stat-label">Same Version</div></div>
       <div class="stat-item"><div class="stat-value amber">${c.diff.length.toLocaleString()}</div><div class="stat-label">Version Changed</div></div>
       <div class="stat-item"><div class="stat-value">${overlap}%</div><div class="stat-label">Package Overlap</div></div>
-      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()}</div><div class="stat-label">CGR Secured</div></div>
-      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()}</div><div class="stat-label">CGR Upstream</div></div>`;
+      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()}</div><div class="stat-label">CG Secured</div></div>
+      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()}</div><div class="stat-label">CG Upstream</div></div>`;
   }
 }
 
