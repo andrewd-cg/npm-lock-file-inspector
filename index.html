@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>npm Lock File Inspector</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-surface: #161b22;
+    --bg-elevated: #1c2230;
+    --bg-hover: #21283a;
+    --border: #30363d;
+    --border-accent: #388bfd;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --text-link: #58a6ff;
+    --accent-blue: #388bfd;
+    --accent-green: #3fb950;
+    --accent-amber: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #a371f7;
+
+    --row-only-a: rgba(248, 81, 73, 0.08);
+    --row-only-b: rgba(63, 185, 80, 0.08);
+    --row-same: rgba(56, 139, 253, 0.06);
+    --row-diff: rgba(210, 153, 34, 0.1);
+
+    --tag-only-a-bg: rgba(248, 81, 73, 0.15);
+    --tag-only-a-fg: #f85149;
+    --tag-only-b-bg: rgba(63, 185, 80, 0.15);
+    --tag-only-b-fg: #3fb950;
+    --tag-same-bg: rgba(56, 139, 253, 0.15);
+    --tag-same-fg: #58a6ff;
+    --tag-diff-bg: rgba(210, 153, 34, 0.15);
+    --tag-diff-fg: #d29922;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  #app {
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .header-icon {
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, #1f6feb, #388bfd);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .header h1 { font-size: 20px; font-weight: 600; color: var(--text); }
+  .header p { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+
+  /* Upload Zone */
+  .upload-section { margin-bottom: 20px; }
+  .upload-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .upload-grid.single { grid-template-columns: 1fr; }
+
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 32px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--bg-surface);
+    position: relative;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent-blue);
+    background: rgba(56, 139, 253, 0.05);
+  }
+  .drop-zone.filled {
+    border-style: solid;
+    border-color: var(--accent-green);
+    background: rgba(63, 185, 80, 0.04);
+    cursor: default;
+    padding: 16px 24px;
+  }
+  .drop-zone input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+  .drop-zone.filled input[type="file"] { display: none; }
+  .drop-zone-icon { font-size: 28px; margin-bottom: 8px; }
+  .drop-zone-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .drop-zone-sub { font-size: 12px; color: var(--text-muted); }
+  .drop-zone-tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 20px;
+    margin-bottom: 8px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .tag-a { background: var(--tag-only-a-bg); color: var(--tag-only-a-fg); }
+  .tag-b { background: var(--tag-only-b-bg); color: var(--tag-only-b-fg); }
+
+  .file-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-align: left;
+  }
+  .file-info-icon { font-size: 22px; }
+  .file-info-name { font-size: 13px; font-weight: 600; color: var(--text); word-break: break-all; }
+  .file-info-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .file-remove {
+    margin-left: auto;
+    flex-shrink: 0;
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    transition: all 0.15s;
+  }
+  .file-remove:hover { background: var(--row-only-a); border-color: var(--accent-red); color: var(--accent-red); }
+
+  /* Error Banner */
+  .error-banner {
+    display: none;
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid rgba(248, 81, 73, 0.3);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: var(--accent-red);
+  }
+  .error-banner.visible { display: block; }
+
+  /* Stats Bar */
+  .stats-bar {
+    display: none;
+    gap: 0;
+    margin-bottom: 16px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .stats-bar.visible { display: flex; flex-wrap: wrap; }
+  .stat-item {
+    padding: 12px 20px;
+    border-right: 1px solid var(--border);
+    flex: 1;
+    min-width: 120px;
+  }
+  .stat-item:last-child { border-right: none; }
+  .stat-value { font-size: 20px; font-weight: 700; color: var(--text); }
+  .stat-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat-value.green { color: var(--accent-green); }
+  .stat-value.red { color: var(--accent-red); }
+  .stat-value.amber { color: var(--accent-amber); }
+  .stat-value.blue { color: var(--accent-blue); }
+  .stat-value.purple { color: var(--accent-purple); }
+
+  /* Tabs */
+  .tabs {
+    display: none;
+    gap: 6px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .tabs.visible { display: flex; }
+  .tab-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s;
+  }
+  .tab-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .tab-btn.active { background: var(--bg-elevated); color: var(--text); border-color: var(--accent-blue); }
+  .tab-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 10px;
+    min-width: 20px;
+    text-align: center;
+  }
+
+  /* Toolbar */
+  .toolbar {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .toolbar.visible { display: flex; }
+  .search-wrap { position: relative; flex: 1; max-width: 360px; }
+  .search-wrap svg {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--text-muted); pointer-events: none;
+  }
+  .search-input {
+    width: 100%;
+    padding: 8px 12px 8px 34px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .search-input:focus { border-color: var(--accent-blue); }
+  .search-input::placeholder { color: var(--text-muted); }
+  .result-count { font-size: 12px; color: var(--text-muted); margin-left: auto; white-space: nowrap; }
+
+  /* Table */
+  .table-wrap {
+    display: none;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .table-wrap.visible { display: block; }
+  .table-scroll { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead th {
+    background: var(--bg-elevated);
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    user-select: none;
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+  thead th:hover { color: var(--text); }
+  thead th.sorted { color: var(--accent-blue); }
+  thead th .sort-arrow { margin-left: 4px; opacity: 0.5; }
+  thead th.sorted .sort-arrow { opacity: 1; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--bg-hover); }
+  tbody td { padding: 10px 14px; vertical-align: middle; }
+
+  a.pkg-name { font-weight: 600; color: var(--text); font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; text-decoration: none; }
+  a.pkg-name:hover { color: var(--text-link); text-decoration: underline; }
+  .pkg-version { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; color: var(--text-muted); }
+  .pkg-url {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-link);
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+  }
+  .pkg-url:hover { text-decoration: underline; }
+  .cgr-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-right: 6px;
+    vertical-align: middle;
+    white-space: nowrap;
+    letter-spacing: 0.03em;
+  }
+  .cgr-secured {
+    background: rgba(63, 185, 80, 0.15);
+    color: #3fb950;
+    border: 1px solid rgba(63, 185, 80, 0.3);
+  }
+  .cgr-upstream {
+    background: rgba(167, 139, 250, 0.15);
+    color: #a78bfa;
+    border: 1px solid rgba(167, 139, 250, 0.3);
+  }
+
+  .pkg-license {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: rgba(56, 139, 253, 0.12);
+    color: var(--text-link);
+    white-space: nowrap;
+  }
+  .pkg-license.no-license { background: transparent; color: var(--text-muted); font-weight: 400; }
+
+  /* Diff row styles */
+  tr.only-a { background: var(--row-only-a); }
+  tr.only-b { background: var(--row-only-b); }
+  tr.same { background: var(--row-same); }
+  tr.diff { background: var(--row-diff); }
+  tr.only-a:hover { background: rgba(248, 81, 73, 0.14); }
+  tr.only-b:hover { background: rgba(63, 185, 80, 0.14); }
+  tr.same:hover { background: rgba(56, 139, 253, 0.1); }
+  tr.diff:hover { background: rgba(210, 153, 34, 0.16); }
+
+  .diff-version-a { color: var(--accent-red); font-family: monospace; }
+  .diff-version-b { color: var(--accent-green); font-family: monospace; }
+  .diff-version-same { color: var(--text-muted); font-family: monospace; }
+
+  /* Source badge */
+  .source-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-right: 6px;
+  }
+  .source-a { background: var(--tag-only-a-bg); color: var(--tag-only-a-fg); }
+  .source-b { background: var(--tag-only-b-bg); color: var(--tag-only-b-fg); }
+
+  /* Loading spinner */
+  .spinner-wrap {
+    display: none;
+    justify-content: center;
+    align-items: center;
+    padding: 48px;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .spinner-wrap.visible { display: flex; }
+  .spinner {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent-blue);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Empty state */
+  .empty-state {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-muted);
+    font-size: 13px;
+    display: none;
+  }
+  .empty-state.visible { display: block; }
+  .empty-state-icon { font-size: 32px; margin-bottom: 12px; }
+  .empty-state h3 { font-size: 15px; color: var(--text); margin-bottom: 6px; }
+
+  /* Identical files banner */
+  .identical-banner {
+    display: none;
+    background: rgba(63, 185, 80, 0.08);
+    border: 1px solid rgba(63, 185, 80, 0.3);
+    border-radius: 8px;
+    padding: 14px 20px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: var(--accent-green);
+    text-align: center;
+    font-weight: 500;
+  }
+  .identical-banner.visible { display: block; }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .upload-grid { grid-template-columns: 1fr; }
+    .stats-bar { flex-direction: column; }
+    .stat-item { border-right: none; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="header">
+    <div class="header-icon">🔍</div>
+    <div>
+      <h1>npm Lock File Inspector</h1>
+      <p>Upload one or two package-lock.json files to inspect or compare dependencies</p>
+    </div>
+  </div>
+
+  <!-- Upload -->
+  <div class="upload-section">
+    <div class="upload-grid" id="upload-grid">
+      <div class="drop-zone" id="drop-a" ondragover="handleDragOver(event,'a')" ondragleave="handleDragLeave(event,'a')" ondrop="handleDrop(event,'a')">
+        <input type="file" accept=".json,application/json" onchange="handleFileInput(event,'a')">
+        <div id="drop-a-content">
+          <div class="drop-zone-icon">📦</div>
+          <div class="drop-zone-label">Drop package-lock.json here</div>
+          <div class="drop-zone-sub">or click to browse &mdash; supports lockfile v1, v2, v3</div>
+        </div>
+      </div>
+      <div class="drop-zone" id="drop-b" ondragover="handleDragOver(event,'b')" ondragleave="handleDragLeave(event,'b')" ondrop="handleDrop(event,'b')">
+        <input type="file" accept=".json,application/json" onchange="handleFileInput(event,'b')">
+        <div id="drop-b-content">
+          <div class="drop-zone-icon">🔗</div>
+          <div class="drop-zone-label">Drop second file to compare</div>
+          <div class="drop-zone-sub">Optional &mdash; e.g. Chainguard lock file</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="error-banner" id="error-banner"></div>
+  <div class="identical-banner" id="identical-banner">✓ Both lock files resolve to identical packages and versions</div>
+
+  <!-- Stats -->
+  <div class="stats-bar" id="stats-bar"></div>
+
+  <!-- Tabs (compare mode) -->
+  <div class="tabs" id="tabs"></div>
+
+  <!-- Toolbar -->
+  <div class="toolbar" id="toolbar">
+    <div class="search-wrap">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zm-5.242 1.156a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z"/>
+      </svg>
+      <input class="search-input" id="search-input" type="text" placeholder="Filter packages..." oninput="handleSearch(this.value)">
+    </div>
+    <span class="result-count" id="result-count"></span>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap" id="table-wrap">
+    <div class="spinner-wrap" id="spinner">
+      <div class="spinner"></div> Parsing lock file...
+    </div>
+    <div class="table-scroll">
+      <table id="main-table">
+        <thead id="table-head"></thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+    <div class="empty-state" id="empty-state">
+      <div class="empty-state-icon">🔎</div>
+      <h3>No packages match</h3>
+      <p>Try a different search term</p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+const state = {
+  mode: 'idle',       // 'idle' | 'single' | 'compare'
+  fileA: null,        // { filename, parsed: Map, count, lockfileVersion }
+  fileB: null,
+  comparison: null,   // { onlyA, onlyB, same, diff }
+  filter: '',
+  sortKey: 'name',
+  sortDir: 'asc',
+  activeTab: 'all',   // 'all' | 'onlyA' | 'onlyB' | 'same' | 'diff'
+  loading: false,
+};
+
+// ─── Parser ───────────────────────────────────────────────────────────────────
+function extractNameFromPath(path) {
+  // e.g. "node_modules/foo" → "foo"
+  // "node_modules/@scope/pkg" → "@scope/pkg"
+  // "node_modules/bar/node_modules/baz" → "baz"
+  const parts = path.split('node_modules/');
+  return parts[parts.length - 1].replace(/\/$/, '');
+}
+
+function parseLockfile(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`Invalid JSON: ${e.message}`);
+  }
+
+  const lv = data.lockfileVersion ?? 1;
+
+  if (!data.packages && !data.dependencies) {
+    throw new Error('This does not appear to be a package-lock.json file (no packages or dependencies field found).');
+  }
+
+  if (lv >= 2 && data.packages) {
+    return parsePackagesBlock(data.packages, lv);
+  } else if (data.dependencies) {
+    return parseDependenciesBlock(data.dependencies);
+  } else {
+    throw new Error('Could not find parseable package data in this lockfile.');
+  }
+}
+
+function parsePackagesBlock(packages, lv) {
+  const map = new Map();
+  for (const [path, meta] of Object.entries(packages)) {
+    if (path === '') continue; // root project
+    // Skip workspace entries (no node_modules/ prefix, no resolved)
+    if (!path.includes('node_modules/')) continue;
+
+    const name = extractNameFromPath(path);
+    if (!name) continue;
+
+    const key = name + '@' + (meta.version || '');
+    if (!map.has(key)) {
+      map.set(key, {
+        name,
+        version: meta.version || '',
+        resolved: meta.resolved || '',
+        license: meta.license || null,
+        integrity: meta.integrity || '',
+      });
+    }
+  }
+  return { map, lockfileVersion: lv };
+}
+
+function parseDependenciesBlock(deps, result = new Map()) {
+  if (!deps) return result;
+  for (const [name, meta] of Object.entries(deps)) {
+    const key = name + '@' + (meta.version || '');
+    if (!result.has(key)) {
+      result.set(key, {
+        name,
+        version: meta.version || '',
+        resolved: meta.resolved || '',
+        license: null,
+        integrity: meta.integrity || '',
+      });
+    }
+    if (meta.dependencies) {
+      parseDependenciesBlock(meta.dependencies, result);
+    }
+  }
+  return { map: result, lockfileVersion: 1 };
+}
+
+// ─── Comparison ───────────────────────────────────────────────────────────────
+function buildNameMap(parsed) {
+  // Collapse name@version map to name → entry (keep highest semver if dupes)
+  const nameMap = new Map();
+  for (const entry of parsed.map.values()) {
+    const existing = nameMap.get(entry.name);
+    if (!existing || compareSemver(entry.version, existing.version) > 0) {
+      nameMap.set(entry.name, entry);
+    }
+  }
+  return nameMap;
+}
+
+function buildComparison(parsedA, parsedB) {
+  const mapA = buildNameMap(parsedA);
+  const mapB = buildNameMap(parsedB);
+
+  const onlyA = [], onlyB = [], same = [], diff = [];
+
+  for (const [name, entA] of mapA) {
+    if (!mapB.has(name)) {
+      onlyA.push(entA);
+    } else {
+      const entB = mapB.get(name);
+      if (entA.version === entB.version) {
+        same.push({ a: entA, b: entB });
+      } else {
+        diff.push({ a: entA, b: entB });
+      }
+    }
+  }
+  for (const [name, entB] of mapB) {
+    if (!mapA.has(name)) onlyB.push(entB);
+  }
+
+  return { onlyA, onlyB, same, diff };
+}
+
+// ─── Semver comparison ────────────────────────────────────────────────────────
+function compareSemver(a, b) {
+  const pa = String(a).split('.').map(x => parseInt(x) || 0);
+  const pb = String(b).split('.').map(x => parseInt(x) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// ─── File handling ────────────────────────────────────────────────────────────
+function handleDragOver(e, slot) {
+  e.preventDefault();
+  document.getElementById(`drop-${slot}`).classList.add('drag-over');
+}
+function handleDragLeave(e, slot) {
+  document.getElementById(`drop-${slot}`).classList.remove('drag-over');
+}
+function handleDrop(e, slot) {
+  e.preventDefault();
+  document.getElementById(`drop-${slot}`).classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) loadFile(file, slot);
+}
+function handleFileInput(e, slot) {
+  const file = e.target.files[0];
+  if (file) loadFile(file, slot);
+}
+
+function loadFile(file, slot) {
+  showError('');
+  state.loading = true;
+  renderSpinner(true);
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    setTimeout(() => {
+      try {
+        const parsed = parseLockfile(e.target.result);
+        const data = { filename: file.name, parsed, count: parsed.map.size };
+
+        if (slot === 'a') {
+          state.fileA = data;
+        } else {
+          state.fileB = data;
+        }
+
+        if (state.fileA && state.fileB) {
+          state.mode = 'compare';
+          state.comparison = buildComparison(state.fileA.parsed, state.fileB.parsed);
+          state.activeTab = 'diff';
+          if (state.comparison.diff.length === 0 && state.comparison.onlyA.length === 0 && state.comparison.onlyB.length === 0) {
+            state.activeTab = 'same';
+          }
+        } else {
+          state.mode = 'single';
+          state.activeTab = 'all';
+        }
+
+        state.filter = '';
+        state.sortKey = 'name';
+        state.sortDir = 'asc';
+        state.loading = false;
+        render();
+      } catch (err) {
+        state.loading = false;
+        renderSpinner(false);
+        showError(`Error parsing ${file.name}: ${err.message}`);
+      }
+    }, 0);
+  };
+  reader.readAsText(file);
+}
+
+function removeFile(slot) {
+  if (slot === 'a') {
+    state.fileA = null;
+    if (state.fileB) {
+      // shift B to A
+      state.fileA = state.fileB;
+      state.fileB = null;
+    }
+  } else {
+    state.fileB = null;
+  }
+
+  state.comparison = null;
+  state.mode = state.fileA ? 'single' : 'idle';
+  state.activeTab = 'all';
+  state.filter = '';
+  render();
+}
+
+// ─── Search & Sort ────────────────────────────────────────────────────────────
+let searchTimeout;
+function handleSearch(val) {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    state.filter = val.toLowerCase();
+    renderTable();
+    renderResultCount();
+  }, 100);
+}
+
+function handleSort(key) {
+  if (state.sortKey === key) {
+    state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.sortKey = key;
+    state.sortDir = 'asc';
+  }
+  renderTable();
+}
+
+function handleTabChange(tab) {
+  state.activeTab = tab;
+  state.filter = '';
+  document.getElementById('search-input').value = '';
+  render();
+}
+
+function sortEntries(entries, key, dir) {
+  return [...entries].sort((a, b) => {
+    let va = a[key] || '';
+    let vb = b[key] || '';
+    if (key === 'version') {
+      const cv = compareSemver(va, vb);
+      return dir === 'asc' ? cv : -cv;
+    }
+    const r = String(va).localeCompare(String(vb));
+    return dir === 'asc' ? r : -r;
+  });
+}
+
+// ─── Render helpers ───────────────────────────────────────────────────────────
+function showError(msg) {
+  const el = document.getElementById('error-banner');
+  el.textContent = msg;
+  el.classList.toggle('visible', !!msg);
+}
+
+function renderSpinner(show) {
+  document.getElementById('spinner').classList.toggle('visible', show);
+  document.getElementById('table-wrap').classList.toggle('visible', show || state.mode !== 'idle');
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function pkgLink(name) {
+  return `<a class="pkg-name" href="https://www.npmjs.com/package/${esc(name)}" target="_blank" rel="noopener" title="View on npmjs.com">${esc(name)}</a>`;
+}
+
+function licenseTag(license) {
+  if (!license) return `<span class="pkg-license no-license">&mdash;</span>`;
+  return `<span class="pkg-license">${esc(license)}</span>`;
+}
+
+function cgrIcon(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname !== 'libraries.cgr.dev') return '';
+    if (u.pathname.startsWith('/javascript-upstream/')) {
+      return `<span class="cgr-badge cgr-upstream" title="Chainguard cache, 7 day cooldown &amp; Malware scanned">\u2191 upstream</span>`;
+    }
+    if (u.pathname.startsWith('/javascript/')) {
+      return `<span class="cgr-badge cgr-secured" title="Chainguard Built">&#128274; secured</span>`;
+    }
+  } catch {}
+  return '';
+}
+
+function urlCell(url, label) {
+  if (!url) return `<span style="color:var(--text-muted)">—</span>`;
+  const icon = cgrIcon(url);
+  return `${icon}<a class="pkg-url" href="${esc(url)}" target="_blank" rel="noopener" title="${esc(url)}">${esc(label || url)}</a>`;
+}
+
+function shortUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    return u.hostname + u.pathname;
+  } catch { return url; }
+}
+
+function sortArrow(key) {
+  if (state.sortKey !== key) return `<span class="sort-arrow">↕</span>`;
+  return `<span class="sort-arrow">${state.sortDir === 'asc' ? '↑' : '↓'}</span>`;
+}
+
+// ─── Main render ──────────────────────────────────────────────────────────────
+function render() {
+  renderUploadZones();
+  renderStats();
+  renderTabs();
+  renderToolbar();
+  renderTable();
+  renderResultCount();
+  renderIdenticalBanner();
+
+  const tw = document.getElementById('table-wrap');
+  tw.classList.toggle('visible', state.mode !== 'idle');
+}
+
+function renderUploadZones() {
+  const grid = document.getElementById('upload-grid');
+  const dropA = document.getElementById('drop-a');
+  const dropB = document.getElementById('drop-b');
+  const contentA = document.getElementById('drop-a-content');
+  const contentB = document.getElementById('drop-b-content');
+
+  if (state.fileA) {
+    dropA.classList.add('filled');
+    contentA.innerHTML = `
+      <div class="file-info">
+        <div class="file-info-icon">📄</div>
+        <div>
+          ${state.mode === 'compare' ? `<span class="drop-zone-tag tag-a">${labelA()}</span>` : ''}
+          <div class="file-info-name">${esc(state.fileA.filename)}</div>
+          <div class="file-info-meta">${state.fileA.count.toLocaleString()} packages &bull; lockfile v${state.fileA.parsed.lockfileVersion}</div>
+        </div>
+        <button class="file-remove" onclick="removeFile('a')" title="Remove">✕</button>
+      </div>`;
+  } else {
+    dropA.classList.remove('filled');
+    contentA.innerHTML = `
+      <div class="drop-zone-icon">📦</div>
+      <div class="drop-zone-label">Drop package-lock.json here</div>
+      <div class="drop-zone-sub">or click to browse &mdash; supports lockfile v1, v2, v3</div>`;
+  }
+
+  if (state.fileB) {
+    dropB.classList.add('filled');
+    contentB.innerHTML = `
+      <div class="file-info">
+        <div class="file-info-icon">📄</div>
+        <div>
+          <span class="drop-zone-tag tag-b">${labelB()}</span>
+          <div class="file-info-name">${esc(state.fileB.filename)}</div>
+          <div class="file-info-meta">${state.fileB.count.toLocaleString()} packages &bull; lockfile v${state.fileB.parsed.lockfileVersion}</div>
+        </div>
+        <button class="file-remove" onclick="removeFile('b')" title="Remove">✕</button>
+      </div>`;
+  } else {
+    dropB.classList.remove('filled');
+    if (state.mode === 'single') {
+      contentB.innerHTML = `
+        <div class="drop-zone-icon">🔗</div>
+        <div class="drop-zone-label">Add second file to compare</div>
+        <div class="drop-zone-sub">e.g. Chainguard lock file</div>`;
+    } else {
+      contentB.innerHTML = `
+        <div class="drop-zone-icon">🔗</div>
+        <div class="drop-zone-label">Drop second file to compare</div>
+        <div class="drop-zone-sub">Optional &mdash; e.g. Chainguard lock file</div>`;
+    }
+  }
+}
+
+function labelA() {
+  if (!state.fileA) return 'File A';
+  const f = state.fileA.filename.toLowerCase();
+  if (f.includes('chainguard')) return 'Chainguard';
+  if (f.includes('public') || f.includes('npm')) return 'npm';
+  return 'File A';
+}
+function labelB() {
+  if (!state.fileB) return 'File B';
+  const f = state.fileB.filename.toLowerCase();
+  if (f.includes('chainguard')) return 'Chainguard';
+  if (f.includes('public') || f.includes('npm')) return 'npm';
+  return 'File B';
+}
+
+function cgrCounts(entries) {
+  let secured = 0, upstream = 0;
+  for (const e of entries) {
+    if (!e.resolved) continue;
+    try {
+      const u = new URL(e.resolved);
+      if (u.hostname !== 'libraries.cgr.dev') continue;
+      if (u.pathname.startsWith('/javascript-upstream/')) upstream++;
+      else if (u.pathname.startsWith('/javascript/')) secured++;
+    } catch {}
+  }
+  return { secured, upstream };
+}
+
+function renderStats() {
+  const bar = document.getElementById('stats-bar');
+  if (state.mode === 'idle') { bar.classList.remove('visible'); return; }
+  bar.classList.add('visible');
+
+  if (state.mode === 'single') {
+    const entries = [...state.fileA.parsed.map.values()];
+    const withUrl = entries.filter(e => e.resolved).length;
+    const withLic = entries.filter(e => e.license).length;
+    const cgr = cgrCounts(entries);
+    bar.innerHTML = `
+      <div class="stat-item"><div class="stat-value">${entries.length.toLocaleString()}</div><div class="stat-label">Packages</div></div>
+      <div class="stat-item"><div class="stat-value blue">${withUrl.toLocaleString()}</div><div class="stat-label">With Resolved URL</div></div>
+      <div class="stat-item"><div class="stat-value purple">${withLic.toLocaleString()}</div><div class="stat-label">With License</div></div>
+      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()}</div><div class="stat-label">CGR Secured</div></div>
+      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()}</div><div class="stat-label">CGR Upstream</div></div>
+      <div class="stat-item"><div class="stat-value">${state.fileA.parsed.lockfileVersion}</div><div class="stat-label">Lockfile Version</div></div>`;
+  } else {
+    const c = state.comparison;
+    const total = c.onlyA.length + c.onlyB.length + c.same.length + c.diff.length;
+    const overlap = total > 0 ? Math.round((c.same.length + c.diff.length) / total * 100) : 0;
+    const allB = [...state.fileB.parsed.map.values()];
+    const cgr = cgrCounts(allB);
+    bar.innerHTML = `
+      <div class="stat-item"><div class="stat-value red">${c.onlyA.length.toLocaleString()}</div><div class="stat-label">Only in ${esc(labelA())}</div></div>
+      <div class="stat-item"><div class="stat-value green">${c.onlyB.length.toLocaleString()}</div><div class="stat-label">Only in ${esc(labelB())}</div></div>
+      <div class="stat-item"><div class="stat-value blue">${c.same.length.toLocaleString()}</div><div class="stat-label">Same Version</div></div>
+      <div class="stat-item"><div class="stat-value amber">${c.diff.length.toLocaleString()}</div><div class="stat-label">Version Changed</div></div>
+      <div class="stat-item"><div class="stat-value">${overlap}%</div><div class="stat-label">Package Overlap</div></div>
+      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()}</div><div class="stat-label">CGR Secured</div></div>
+      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()}</div><div class="stat-label">CGR Upstream</div></div>`;
+  }
+}
+
+function renderTabs() {
+  const tabs = document.getElementById('tabs');
+  if (state.mode !== 'compare') { tabs.classList.remove('visible'); return; }
+  tabs.classList.add('visible');
+  const c = state.comparison;
+
+  const tabDefs = [
+    { id: 'diff',  label: 'Version Changed', count: c.diff.length,  color: 'var(--tag-diff-fg)',  bg: 'var(--tag-diff-bg)'  },
+    { id: 'onlyA', label: `Only in ${labelA()}`, count: c.onlyA.length, color: 'var(--tag-only-a-fg)', bg: 'var(--tag-only-a-bg)' },
+    { id: 'onlyB', label: `Only in ${labelB()}`, count: c.onlyB.length, color: 'var(--tag-only-b-fg)', bg: 'var(--tag-only-b-bg)' },
+    { id: 'same',  label: 'Same Version',     count: c.same.length,  color: 'var(--tag-same-fg)',  bg: 'var(--tag-same-bg)'  },
+    { id: 'all',   label: 'All Packages',     count: c.onlyA.length + c.onlyB.length + c.same.length + c.diff.length, color: 'var(--text-muted)', bg: 'var(--bg-elevated)' },
+  ];
+
+  tabs.innerHTML = tabDefs.map(t => `
+    <button class="tab-btn ${state.activeTab === t.id ? 'active' : ''}" onclick="handleTabChange('${t.id}')">
+      ${esc(t.label)}
+      <span class="tab-badge" style="background:${t.bg};color:${t.color}">${t.count.toLocaleString()}</span>
+    </button>`).join('');
+}
+
+function renderToolbar() {
+  const tb = document.getElementById('toolbar');
+  tb.classList.toggle('visible', state.mode !== 'idle');
+}
+
+function getVisibleEntries() {
+  const f = state.filter;
+
+  if (state.mode === 'single') {
+    let entries = [...state.fileA.parsed.map.values()];
+    if (f) entries = entries.filter(e => e.name.toLowerCase().includes(f));
+    return { type: 'single', entries: sortEntries(entries, state.sortKey, state.sortDir) };
+  }
+
+  const c = state.comparison;
+  const tab = state.activeTab;
+
+  if (tab === 'onlyA') {
+    let entries = f ? c.onlyA.filter(e => e.name.toLowerCase().includes(f)) : c.onlyA;
+    return { type: 'single', entries: sortEntries(entries, state.sortKey, state.sortDir) };
+  }
+  if (tab === 'onlyB') {
+    let entries = f ? c.onlyB.filter(e => e.name.toLowerCase().includes(f)) : c.onlyB;
+    return { type: 'single', entries: sortEntries(entries, state.sortKey, state.sortDir) };
+  }
+  if (tab === 'same') {
+    let pairs = f ? c.same.filter(p => p.a.name.toLowerCase().includes(f)) : c.same;
+    pairs = [...pairs].sort((x, y) => {
+      const r = x.a.name.localeCompare(y.a.name);
+      return state.sortDir === 'asc' ? r : -r;
+    });
+    return { type: 'same', pairs };
+  }
+  if (tab === 'diff') {
+    let pairs = f ? c.diff.filter(p => p.a.name.toLowerCase().includes(f)) : c.diff;
+    pairs = [...pairs].sort((x, y) => {
+      let va = state.sortKey === 'version' ? x.a.version : x.a[state.sortKey] || '';
+      let vb = state.sortKey === 'version' ? y.a.version : y.a[state.sortKey] || '';
+      const r = String(va).localeCompare(String(vb));
+      return state.sortDir === 'asc' ? r : -r;
+    });
+    return { type: 'diff', pairs };
+  }
+  // all
+  const allEntries = [];
+  if (f) {
+    c.onlyA.forEach(e => { if(e.name.toLowerCase().includes(f)) allEntries.push({...e, _cat:'onlyA'}); });
+    c.onlyB.forEach(e => { if(e.name.toLowerCase().includes(f)) allEntries.push({...e, _cat:'onlyB'}); });
+    c.same.forEach(p => { if(p.a.name.toLowerCase().includes(f)) allEntries.push({...p.a, _cat:'same', _b: p.b}); });
+    c.diff.forEach(p => { if(p.a.name.toLowerCase().includes(f)) allEntries.push({...p.a, _cat:'diff', _b: p.b}); });
+  } else {
+    c.onlyA.forEach(e => allEntries.push({...e, _cat:'onlyA'}));
+    c.onlyB.forEach(e => allEntries.push({...e, _cat:'onlyB'}));
+    c.same.forEach(p => allEntries.push({...p.a, _cat:'same', _b: p.b}));
+    c.diff.forEach(p => allEntries.push({...p.a, _cat:'diff', _b: p.b}));
+  }
+  const sorted = sortEntries(allEntries, state.sortKey, state.sortDir);
+  return { type: 'all', entries: sorted };
+}
+
+function renderTable() {
+  if (state.loading || state.mode === 'idle') return;
+
+  const thead = document.getElementById('table-head');
+  const tbody = document.getElementById('table-body');
+  const emptyState = document.getElementById('empty-state');
+  const spinner = document.getElementById('spinner');
+
+  spinner.classList.remove('visible');
+
+  const vis = getVisibleEntries();
+
+  // Build header
+  const commonCols = `
+    <th onclick="handleSort('name')">Package Name ${sortArrow('name')}</th>
+    <th onclick="handleSort('version')">Version ${sortArrow('version')}</th>
+    <th onclick="handleSort('resolved')">Resolved URL ${sortArrow('resolved')}</th>
+    <th onclick="handleSort('license')">License ${sortArrow('license')}</th>`;
+
+  if (vis.type === 'diff') {
+    thead.innerHTML = `<tr>
+      <th onclick="handleSort('name')">Package Name ${sortArrow('name')}</th>
+      <th>${esc(labelA())} Version</th>
+      <th>${esc(labelB())} Version</th>
+      <th>${esc(labelA())} Resolved</th>
+      <th>${esc(labelB())} Resolved</th>
+      <th>License</th>
+    </tr>`;
+  } else if (vis.type === 'same') {
+    thead.innerHTML = `<tr>
+      <th onclick="handleSort('name')">Package Name ${sortArrow('name')}</th>
+      <th onclick="handleSort('version')">Version ${sortArrow('version')}</th>
+      <th>${esc(labelA())} Resolved</th>
+      <th>${esc(labelB())} Resolved</th>
+      <th>License</th>
+    </tr>`;
+  } else if (vis.type === 'all' && state.mode === 'compare') {
+    thead.innerHTML = `<tr>
+      <th onclick="handleSort('name')">Package Name ${sortArrow('name')}</th>
+      <th onclick="handleSort('version')">Version</th>
+      <th>Status</th>
+      <th onclick="handleSort('resolved')">Resolved URL ${sortArrow('resolved')}</th>
+      <th onclick="handleSort('license')">License ${sortArrow('license')}</th>
+    </tr>`;
+  } else {
+    thead.innerHTML = `<tr>${commonCols}</tr>`;
+  }
+
+  // Build body
+  let rows = '';
+  let count = 0;
+
+  if (vis.type === 'diff') {
+    const pairs = vis.pairs;
+    count = pairs.length;
+    rows = pairs.map(p => `
+      <tr class="diff">
+        <td>${pkgLink(p.a.name)}</td>
+        <td><span class="diff-version-a">${esc(p.a.version)}</span></td>
+        <td><span class="diff-version-b">${esc(p.b.version)}</span></td>
+        <td>${urlCell(p.a.resolved, shortUrl(p.a.resolved))}</td>
+        <td>${urlCell(p.b.resolved, shortUrl(p.b.resolved))}</td>
+        <td>${licenseTag(p.a.license || p.b.license)}</td>
+      </tr>`).join('');
+  } else if (vis.type === 'same') {
+    const pairs = vis.pairs;
+    count = pairs.length;
+    rows = pairs.map(p => `
+      <tr class="same">
+        <td>${pkgLink(p.a.name)}</td>
+        <td><span class="diff-version-same">${esc(p.a.version)}</span></td>
+        <td>${urlCell(p.a.resolved, shortUrl(p.a.resolved))}</td>
+        <td>${urlCell(p.b.resolved, shortUrl(p.b.resolved))}</td>
+        <td>${licenseTag(p.a.license || p.b.license)}</td>
+      </tr>`).join('');
+  } else if (vis.type === 'all') {
+    count = vis.entries.length;
+    rows = vis.entries.map(e => {
+      const cat = e._cat;
+      const statusMap = {
+        onlyA: `<span class="source-badge source-a">${esc(labelA())} only</span>`,
+        onlyB: `<span class="source-badge source-b">${esc(labelB())} only</span>`,
+        same:  `<span style="color:var(--accent-blue);font-size:12px">Same</span>`,
+        diff:  `<span style="color:var(--accent-amber);font-size:12px">Changed ${esc(e._b ? e.version + ' → ' + e._b.version : '')}</span>`,
+      };
+      return `
+        <tr class="${cat}">
+          <td>${pkgLink(e.name)}</td>
+          <td><span class="pkg-version">${esc(e.version)}</span></td>
+          <td>${statusMap[cat] || ''}</td>
+          <td>${urlCell(e.resolved, shortUrl(e.resolved))}</td>
+          <td>${licenseTag(e.license)}</td>
+        </tr>`;
+    }).join('');
+  } else {
+    count = vis.entries.length;
+    rows = vis.entries.map(e => `
+      <tr>
+        <td>${pkgLink(e.name)}</td>
+        <td><span class="pkg-version">${esc(e.version)}</span></td>
+        <td>${urlCell(e.resolved, shortUrl(e.resolved))}</td>
+        <td>${licenseTag(e.license)}</td>
+      </tr>`).join('');
+  }
+
+  tbody.innerHTML = rows;
+  emptyState.classList.toggle('visible', count === 0);
+  document.getElementById('result-count').textContent = count > 0 ? `${count.toLocaleString()} package${count !== 1 ? 's' : ''}` : '';
+}
+
+function renderResultCount() {
+  // handled in renderTable
+}
+
+function renderIdenticalBanner() {
+  const el = document.getElementById('identical-banner');
+  if (state.mode === 'compare' && state.comparison) {
+    const c = state.comparison;
+    const identical = c.onlyA.length === 0 && c.onlyB.length === 0 && c.diff.length === 0;
+    el.classList.toggle('visible', identical);
+  } else {
+    el.classList.remove('visible');
+  }
+}
+
+// Initial render
+render();
+</script>
+</body>
+</html>
