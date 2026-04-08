@@ -418,6 +418,40 @@
   }
   .identical-banner.visible { display: block; }
 
+  /* Snapshot banner */
+  .snapshot-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    background: rgba(56, 139, 253, 0.08);
+    border: 1px solid rgba(56, 139, 253, 0.25);
+    border-radius: 8px;
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .snapshot-banner.visible { display: flex; }
+  .snapshot-banner strong { color: var(--text); }
+
+  /* Export button */
+  .export-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .export-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent-blue); }
+
   /* Responsive */
   @media (max-width: 768px) {
     .upload-grid { grid-template-columns: 1fr; }
@@ -433,7 +467,7 @@
     <div class="header-icon">🔍</div>
     <div>
       <h1>npm Lock File Inspector</h1>
-      <p>Upload one or two package-lock.json files to inspect or compare dependencies</p>
+      <p>Upload a lock file from <strong>npmjs</strong> and one from <strong>Chainguard</strong> to inspect and compare dependencies &mdash; supports package-lock.json and yarn.lock</p>
     </div>
   </div>
 
@@ -441,24 +475,28 @@
   <div class="upload-section">
     <div class="upload-grid" id="upload-grid">
       <div class="drop-zone" id="drop-a" ondragover="handleDragOver(event,'a')" ondragleave="handleDragLeave(event,'a')" ondrop="handleDrop(event,'a')">
-        <input type="file" accept=".json,application/json" onchange="handleFileInput(event,'a')">
+        <input type="file" accept=".json,.lock,application/json" onchange="handleFileInput(event,'a')">
         <div id="drop-a-content">
           <div class="drop-zone-icon">📦</div>
-          <div class="drop-zone-label">Drop package-lock.json here</div>
-          <div class="drop-zone-sub">or click to browse &mdash; supports lockfile v1, v2, v3</div>
+          <div class="drop-zone-label">Drop your <strong>npmjs</strong> lock file here</div>
+          <div class="drop-zone-sub">Supports package-lock.json and yarn.lock &mdash; packages assumed to resolve from registry.npmjs.org</div>
         </div>
       </div>
       <div class="drop-zone" id="drop-b" ondragover="handleDragOver(event,'b')" ondragleave="handleDragLeave(event,'b')" ondrop="handleDrop(event,'b')">
-        <input type="file" accept=".json,application/json" onchange="handleFileInput(event,'b')">
+        <input type="file" accept=".json,.lock,application/json" onchange="handleFileInput(event,'b')">
         <div id="drop-b-content">
           <div class="drop-zone-icon">🔗</div>
-          <div class="drop-zone-label">Drop second file to compare</div>
-          <div class="drop-zone-sub">Optional &mdash; e.g. Chainguard lock file</div>
+          <div class="drop-zone-label">Drop your <strong>Chainguard</strong> lock file here</div>
+          <div class="drop-zone-sub">package-lock.json or yarn.lock &mdash; packages assumed to resolve from libraries.cgr.dev</div>
         </div>
       </div>
     </div>
   </div>
 
+  <div class="snapshot-banner" id="snapshot-banner">
+    <span>📎</span>
+    <span id="snapshot-banner-text"></span>
+  </div>
   <div class="error-banner" id="error-banner"></div>
   <div class="identical-banner" id="identical-banner">✓ Both lock files resolve to identical packages and versions</div>
 
@@ -477,6 +515,10 @@
       <input class="search-input" id="search-input" type="text" placeholder="Filter packages..." oninput="handleSearch(this.value)">
     </div>
     <span class="result-count" id="result-count"></span>
+    <button class="export-btn" id="export-btn" onclick="exportHTML()" title="Save as self-contained HTML file">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14Z"/><path d="M7.25 7.689V2a.75.75 0 0 1 1.5 0v5.689l1.97-1.97a.749.749 0 1 1 1.06 1.06l-3.25 3.25a.749.749 0 0 1-1.06 0L4.22 6.779a.749.749 0 1 1 1.06-1.06z"/></svg>
+      Export snapshot
+    </button>
   </div>
 
   <!-- Table -->
@@ -514,6 +556,14 @@ const state = {
 };
 
 // ─── Parser ───────────────────────────────────────────────────────────────────
+function detectFormat(text) {
+  const t = text.trimStart();
+  if (t.startsWith('{')) return 'package-lock';
+  if (t.startsWith('# yarn lockfile v1')) return 'yarn-v1';
+  if (/^__metadata:/m.test(t)) return 'yarn-berry';
+  throw new Error('Unrecognized lock file format. Expected package-lock.json or yarn.lock.');
+}
+
 function extractNameFromPath(path) {
   // e.g. "node_modules/foo" → "foo"
   // "node_modules/@scope/pkg" → "@scope/pkg"
@@ -522,7 +572,11 @@ function extractNameFromPath(path) {
   return parts[parts.length - 1].replace(/\/$/, '');
 }
 
-function parseLockfile(text) {
+function parseLockfile(text, defaultRegistry) {
+  const fmt = detectFormat(text);
+  if (fmt === 'yarn-v1') return parseYarnV1(text);
+  if (fmt === 'yarn-berry') return parseYarnBerry(text, defaultRegistry);
+
   let data;
   try {
     data = JSON.parse(text);
@@ -543,6 +597,117 @@ function parseLockfile(text) {
   } else {
     throw new Error('Could not find parseable package data in this lockfile.');
   }
+}
+
+// ─── Yarn v1 parser ───────────────────────────────────────────────────────────
+function yarnV1ExtractName(keyLine) {
+  // keyLine may be: pkg@ver, "pkg@ver", "@scope/pkg@ver", or comma-separated multiples
+  const first = keyLine.split(',')[0].trim().replace(/^"|"$/g, '');
+  // Find last @ not at position 0 (scoped packages start with @)
+  const at = first.lastIndexOf('@');
+  return at > 0 ? first.slice(0, at) : first;
+}
+
+function parseYarnV1(text) {
+  const map = new Map();
+  const lines = text.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Skip comments and blank lines
+    if (line.startsWith('#') || line.trim() === '') { i++; continue; }
+
+    // Package header: not indented, ends with ':'
+    if (!line.startsWith(' ') && !line.startsWith('\t') && line.endsWith(':')) {
+      const name = yarnV1ExtractName(line.slice(0, -1));
+      let version = '', resolved = '';
+      i++;
+      while (i < lines.length && (lines[i].startsWith('  ') || lines[i].startsWith('\t'))) {
+        const prop = lines[i].trim();
+        if (prop.startsWith('version ')) {
+          version = prop.slice(8).replace(/"/g, '').trim();
+        } else if (prop.startsWith('resolved ')) {
+          resolved = prop.slice(9).replace(/"/g, '').trim();
+          // Strip integrity hash fragment (#hash at end)
+          const h = resolved.lastIndexOf('#');
+          if (h > 0) resolved = resolved.slice(0, h);
+        }
+        i++;
+      }
+      if (name && version) {
+        const key = name + '@' + version;
+        if (!map.has(key)) {
+          map.set(key, { name, version, resolved, license: null, integrity: '' });
+        }
+      }
+    } else {
+      i++;
+    }
+  }
+
+  return { map, lockfileVersion: 'yarn-v1' };
+}
+
+// ─── Yarn Berry (v2/v3/v4) parser ────────────────────────────────────────────
+function yarnBerryExtractName(descriptor) {
+  // Keys can be comma-separated multi-descriptors — take the first only
+  const first = descriptor.split(', ')[0].trim();
+  // Name is everything before the last @ (handles scoped packages like @scope/pkg@npm:...)
+  const at = first.lastIndexOf('@');
+  return at > 0 ? first.slice(0, at) : first;
+}
+
+function berryFallbackUrl(defaultRegistry, name, version) {
+  if (!defaultRegistry) return '';
+  const base = defaultRegistry.endsWith('/') ? defaultRegistry : defaultRegistry + '/';
+  const basename = name.includes('/') ? name.split('/').pop() : name;
+  return `${base}${name}/-/${basename}-${version}.tgz`;
+}
+
+function parseYarnBerry(text, defaultRegistry) {
+  const map = new Map();
+  const lines = text.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Package header: starts with '"' and ends with '":' (quoted key)
+    if (line.match(/^"[^"]+":$/)) {
+      const descriptor = line.slice(1, -2); // strip leading " and trailing ":
+      const name = yarnBerryExtractName(descriptor);
+      let version = '', resolved = '';
+      i++;
+      while (i < lines.length && (lines[i].startsWith('  ') || lines[i].startsWith('\t'))) {
+        const prop = lines[i].trim();
+        if (prop.startsWith('version: ')) {
+          version = prop.slice(9).trim();
+        } else if (prop.startsWith('resolution: ')) {
+          const raw = prop.slice(12).replace(/"/g, '').trim();
+          // Berry stores registry URL as __archiveUrl=<encoded> in the resolution
+          const archiveMatch = raw.match(/__archiveUrl=([^&\s]+)/);
+          if (archiveMatch) {
+            try { resolved = decodeURIComponent(archiveMatch[1]); } catch { resolved = archiveMatch[1]; }
+          }
+        }
+        i++;
+      }
+      if (name && version && name !== '__metadata') {
+        const key = name + '@' + version;
+        if (!map.has(key)) {
+          // If no explicit URL was found, infer from the default registry for this slot
+          if (!resolved) resolved = berryFallbackUrl(defaultRegistry, name, version);
+          map.set(key, { name, version, resolved, license: null, integrity: '' });
+        }
+      }
+    } else {
+      i++;
+    }
+  }
+
+  return { map, lockfileVersion: 'yarn-berry' };
 }
 
 function parsePackagesBlock(packages, lv) {
@@ -587,6 +752,12 @@ function parseDependenciesBlock(deps, result = new Map()) {
     }
   }
   return { map: result, lockfileVersion: 1 };
+}
+
+function formatLockfileVersion(v) {
+  if (v === 'yarn-v1') return 'Yarn v1';
+  if (v === 'yarn-berry') return 'Yarn Berry';
+  return `npm v${v}`;
 }
 
 // ─── Comparison ───────────────────────────────────────────────────────────────
@@ -666,7 +837,10 @@ function loadFile(file, slot) {
   reader.onload = (e) => {
     setTimeout(() => {
       try {
-        const parsed = parseLockfile(e.target.result);
+        const defaultRegistry = slot === 'b'
+          ? 'https://libraries.cgr.dev/javascript/'
+          : 'https://registry.npmjs.org/';
+        const parsed = parseLockfile(e.target.result, defaultRegistry);
         const data = { filename: file.name, parsed, count: parsed.map.size };
 
         if (slot === 'a') {
@@ -849,7 +1023,7 @@ function renderUploadZones() {
         <div>
           ${state.mode === 'compare' ? `<span class="drop-zone-tag tag-a">${labelA()}</span>` : ''}
           <div class="file-info-name">${esc(state.fileA.filename)}</div>
-          <div class="file-info-meta">${state.fileA.count.toLocaleString()} packages &bull; lockfile v${state.fileA.parsed.lockfileVersion}</div>
+          <div class="file-info-meta">${state.fileA.count.toLocaleString()} packages &bull; ${formatLockfileVersion(state.fileA.parsed.lockfileVersion)}</div>
         </div>
         <button class="file-remove" onclick="removeFile('a')" title="Remove">✕</button>
       </div>`;
@@ -869,7 +1043,7 @@ function renderUploadZones() {
         <div>
           <span class="drop-zone-tag tag-b">${labelB()}</span>
           <div class="file-info-name">${esc(state.fileB.filename)}</div>
-          <div class="file-info-meta">${state.fileB.count.toLocaleString()} packages &bull; lockfile v${state.fileB.parsed.lockfileVersion}</div>
+          <div class="file-info-meta">${state.fileB.count.toLocaleString()} packages &bull; ${formatLockfileVersion(state.fileB.parsed.lockfileVersion)}</div>
         </div>
         <button class="file-remove" onclick="removeFile('b')" title="Remove">✕</button>
       </div>`;
@@ -878,31 +1052,19 @@ function renderUploadZones() {
     if (state.mode === 'single') {
       contentB.innerHTML = `
         <div class="drop-zone-icon">🔗</div>
-        <div class="drop-zone-label">Add second file to compare</div>
-        <div class="drop-zone-sub">e.g. Chainguard lock file</div>`;
+        <div class="drop-zone-label">Now drop your <strong>Chainguard</strong> lock file</div>
+        <div class="drop-zone-sub">package-lock.json or yarn.lock &mdash; packages assumed to resolve from libraries.cgr.dev</div>`;
     } else {
       contentB.innerHTML = `
         <div class="drop-zone-icon">🔗</div>
-        <div class="drop-zone-label">Drop second file to compare</div>
-        <div class="drop-zone-sub">Optional &mdash; e.g. Chainguard lock file</div>`;
+        <div class="drop-zone-label">Drop your <strong>Chainguard</strong> lock file here</div>
+        <div class="drop-zone-sub">package-lock.json or yarn.lock &mdash; packages assumed to resolve from libraries.cgr.dev</div>`;
     }
   }
 }
 
-function labelA() {
-  if (!state.fileA) return 'File A';
-  const f = state.fileA.filename.toLowerCase();
-  if (f.includes('chainguard')) return 'Chainguard';
-  if (f.includes('public') || f.includes('npm')) return 'npm';
-  return 'File A';
-}
-function labelB() {
-  if (!state.fileB) return 'File B';
-  const f = state.fileB.filename.toLowerCase();
-  if (f.includes('chainguard')) return 'Chainguard';
-  if (f.includes('public') || f.includes('npm')) return 'npm';
-  return 'File B';
-}
+function labelA() { return 'npm'; }
+function labelB() { return 'Chainguard'; }
 
 function cgrCounts(entries) {
   let secured = 0, upstream = 0;
@@ -934,7 +1096,7 @@ function renderStats() {
       <div class="stat-item"><div class="stat-value purple">${withLic.toLocaleString()}</div><div class="stat-label">With License</div></div>
       <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()}</div><div class="stat-label">CG Secured</div></div>
       <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()}</div><div class="stat-label">CG Upstream</div></div>
-      <div class="stat-item"><div class="stat-value">${state.fileA.parsed.lockfileVersion}</div><div class="stat-label">Lockfile Version</div></div>`;
+      <div class="stat-item"><div class="stat-value" style="font-size:14px">${formatLockfileVersion(state.fileA.parsed.lockfileVersion)}</div><div class="stat-label">Lockfile Format</div></div>`;
   } else {
     const c = state.comparison;
     const total = c.onlyA.length + c.onlyB.length + c.same.length + c.diff.length;
@@ -1156,6 +1318,69 @@ function renderIdenticalBanner() {
   } else {
     el.classList.remove('visible');
   }
+}
+
+// ─── Export ───────────────────────────────────────────────────────────────────
+function exportHTML() {
+  const preload = {
+    exportedAt: new Date().toISOString(),
+    mode: state.mode,
+    fileA: state.fileA ? {
+      filename: state.fileA.filename,
+      count: state.fileA.count,
+      lockfileVersion: state.fileA.parsed.lockfileVersion,
+      entries: [...state.fileA.parsed.map.entries()],
+    } : null,
+    fileB: state.fileB ? {
+      filename: state.fileB.filename,
+      count: state.fileB.count,
+      lockfileVersion: state.fileB.parsed.lockfileVersion,
+      entries: [...state.fileB.parsed.map.entries()],
+    } : null,
+  };
+
+  const injection = `<script>window.__PRELOADED_STATE__=${JSON.stringify(preload)};<\/script>`;
+  let html = document.documentElement.outerHTML;
+  html = html.replace('</head>', injection + '</head>');
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `npm-lock-snapshot-${new Date().toISOString().slice(0, 10)}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ─── Restore from exported snapshot ──────────────────────────────────────────
+if (window.__PRELOADED_STATE__) {
+  const ps = window.__PRELOADED_STATE__;
+
+  function restoreFile(f) {
+    if (!f) return null;
+    const map = new Map(f.entries);
+    return { filename: f.filename, count: f.count, parsed: { map, lockfileVersion: f.lockfileVersion } };
+  }
+
+  state.fileA = restoreFile(ps.fileA);
+  state.fileB = restoreFile(ps.fileB);
+  state.mode = ps.mode;
+
+  if (state.fileA && state.fileB) {
+    state.comparison = buildComparison(state.fileA.parsed, state.fileB.parsed);
+    state.activeTab = state.comparison.diff.length > 0 ? 'diff' : 'same';
+  } else if (state.fileA) {
+    state.mode = 'single';
+  }
+
+  // Hide upload section, show snapshot banner
+  document.getElementById('upload-grid').closest('.upload-section').style.display = 'none';
+  const banner = document.getElementById('snapshot-banner');
+  banner.classList.add('visible');
+  const names = [ps.fileA?.filename, ps.fileB?.filename].filter(Boolean).join(' vs ');
+  const date = new Date(ps.exportedAt).toLocaleString();
+  document.getElementById('snapshot-banner-text').innerHTML =
+    `<strong>Snapshot</strong> &mdash; ${esc(names)} &mdash; exported ${esc(date)}`;
 }
 
 // Initial render
