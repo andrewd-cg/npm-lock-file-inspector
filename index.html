@@ -761,38 +761,46 @@ function formatLockfileVersion(v) {
 }
 
 // ─── Comparison ───────────────────────────────────────────────────────────────
-function buildNameMap(parsed) {
-  // Collapse name@version map to name → entry (keep highest semver if dupes)
-  const nameMap = new Map();
-  for (const entry of parsed.map.values()) {
-    const existing = nameMap.get(entry.name);
-    if (!existing || compareSemver(entry.version, existing.version) > 0) {
-      nameMap.set(entry.name, entry);
-    }
-  }
-  return nameMap;
-}
-
 function buildComparison(parsedA, parsedB) {
-  const mapA = buildNameMap(parsedA);
-  const mapB = buildNameMap(parsedB);
+  // Build name → Map(version → entry) for each file
+  const nameVerA = new Map();
+  for (const entry of parsedA.map.values()) {
+    if (!nameVerA.has(entry.name)) nameVerA.set(entry.name, new Map());
+    nameVerA.get(entry.name).set(entry.version, entry);
+  }
+  const nameVerB = new Map();
+  for (const entry of parsedB.map.values()) {
+    if (!nameVerB.has(entry.name)) nameVerB.set(entry.name, new Map());
+    nameVerB.get(entry.name).set(entry.version, entry);
+  }
 
   const onlyA = [], onlyB = [], same = [], diff = [];
+  const allNames = new Set([...nameVerA.keys(), ...nameVerB.keys()]);
 
-  for (const [name, entA] of mapA) {
-    if (!mapB.has(name)) {
-      onlyA.push(entA);
+  for (const name of allNames) {
+    const versA = nameVerA.get(name);
+    const versB = nameVerB.get(name);
+
+    if (!versA) {
+      for (const ent of versB.values()) onlyB.push(ent);
+    } else if (!versB) {
+      for (const ent of versA.values()) onlyA.push(ent);
     } else {
-      const entB = mapB.get(name);
-      if (entA.version === entB.version) {
-        same.push({ a: entA, b: entB });
-      } else {
-        diff.push({ a: entA, b: entB });
+      // Name exists in both: compare version by version
+      const diffAEntries = [], diffBEntries = [];
+      for (const [ver, ent] of versA) {
+        if (versB.has(ver)) same.push({ a: ent, b: versB.get(ver) });
+        else diffAEntries.push(ent);
+      }
+      for (const [ver, ent] of versB) {
+        if (!versA.has(ver)) diffBEntries.push(ent);
+      }
+      // Pair up differing versions; zip with nulls for uneven lengths
+      const count = Math.max(diffAEntries.length, diffBEntries.length);
+      for (let i = 0; i < count; i++) {
+        diff.push({ a: diffAEntries[i] || null, b: diffBEntries[i] || null });
       }
     }
-  }
-  for (const [name, entB] of mapB) {
-    if (!mapA.has(name)) onlyB.push(entB);
   }
 
   return { onlyA, onlyB, same, diff };
@@ -1169,10 +1177,11 @@ function getVisibleEntries() {
     return { type: 'same', pairs };
   }
   if (tab === 'diff') {
-    let pairs = f ? c.diff.filter(p => p.a.name.toLowerCase().includes(f)) : c.diff;
+    let pairs = f ? c.diff.filter(p => (p.a || p.b).name.toLowerCase().includes(f)) : c.diff;
     pairs = [...pairs].sort((x, y) => {
-      let va = state.sortKey === 'version' ? x.a.version : x.a[state.sortKey] || '';
-      let vb = state.sortKey === 'version' ? y.a.version : y.a[state.sortKey] || '';
+      const ex = x.a || x.b, ey = y.a || y.b;
+      let va = state.sortKey === 'version' ? ex.version : ex[state.sortKey] || '';
+      let vb = state.sortKey === 'version' ? ey.version : ey[state.sortKey] || '';
       const r = String(va).localeCompare(String(vb));
       return state.sortDir === 'asc' ? r : -r;
     });
@@ -1184,12 +1193,12 @@ function getVisibleEntries() {
     c.onlyA.forEach(e => { if(e.name.toLowerCase().includes(f)) allEntries.push({...e, _cat:'onlyA'}); });
     c.onlyB.forEach(e => { if(e.name.toLowerCase().includes(f)) allEntries.push({...e, _cat:'onlyB'}); });
     c.same.forEach(p => { if(p.a.name.toLowerCase().includes(f)) allEntries.push({...p.a, _cat:'same', _b: p.b}); });
-    c.diff.forEach(p => { if(p.a.name.toLowerCase().includes(f)) allEntries.push({...p.a, _cat:'diff', _b: p.b}); });
+    c.diff.forEach(p => { const e = p.a || p.b; if(e.name.toLowerCase().includes(f)) allEntries.push({...e, _cat:'diff', _a: p.a, _b: p.b}); });
   } else {
     c.onlyA.forEach(e => allEntries.push({...e, _cat:'onlyA'}));
     c.onlyB.forEach(e => allEntries.push({...e, _cat:'onlyB'}));
     c.same.forEach(p => allEntries.push({...p.a, _cat:'same', _b: p.b}));
-    c.diff.forEach(p => allEntries.push({...p.a, _cat:'diff', _b: p.b}));
+    c.diff.forEach(p => allEntries.push({...(p.a || p.b), _cat:'diff', _a: p.a, _b: p.b}));
   }
   const sorted = sortEntries(allEntries, state.sortKey, state.sortDir);
   return { type: 'all', entries: sorted };
@@ -1250,15 +1259,19 @@ function renderTable() {
   if (vis.type === 'diff') {
     const pairs = vis.pairs;
     count = pairs.length;
-    rows = pairs.map(p => `
+    rows = pairs.map(p => {
+      const name = (p.a || p.b).name;
+      const license = (p.a || p.b).license;
+      return `
       <tr class="diff">
-        <td>${pkgLink(p.a.name)}</td>
-        <td><span class="diff-version-a">${esc(p.a.version)}</span></td>
-        <td><span class="diff-version-b">${esc(p.b.version)}</span></td>
-        <td>${urlCell(p.a.resolved, shortUrl(p.a.resolved))}</td>
-        <td>${urlCell(p.b.resolved, shortUrl(p.b.resolved))}</td>
-        <td>${licenseTag(p.a.license || p.b.license)}</td>
-      </tr>`).join('');
+        <td>${pkgLink(name)}</td>
+        <td>${p.a ? `<span class="diff-version-a">${esc(p.a.version)}</span>` : `<span class="diff-version-same">—</span>`}</td>
+        <td>${p.b ? `<span class="diff-version-b">${esc(p.b.version)}</span>` : `<span class="diff-version-same">—</span>`}</td>
+        <td>${p.a ? urlCell(p.a.resolved, shortUrl(p.a.resolved)) : '—'}</td>
+        <td>${p.b ? urlCell(p.b.resolved, shortUrl(p.b.resolved)) : '—'}</td>
+        <td>${licenseTag(license)}</td>
+      </tr>`;
+    }).join('');
   } else if (vis.type === 'same') {
     const pairs = vis.pairs;
     count = pairs.length;
@@ -1278,7 +1291,7 @@ function renderTable() {
         onlyA: `<span class="source-badge source-a">${esc(labelA())} only</span>`,
         onlyB: `<span class="source-badge source-b">${esc(labelB())} only</span>`,
         same:  `<span style="color:var(--accent-blue);font-size:12px">Same</span>`,
-        diff:  `<span style="color:var(--accent-amber);font-size:12px">Changed ${esc(e._b ? e.version + ' → ' + e._b.version : '')}</span>`,
+        diff:  `<span style="color:var(--accent-amber);font-size:12px">Changed ${esc(e._a && e._b ? e._a.version + ' → ' + e._b.version : e._a ? e._a.version + ' → —' : '— → ' + e._b.version)}</span>`,
       };
       return `
         <tr class="${cat}">
