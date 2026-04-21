@@ -974,10 +974,10 @@ function cgrIcon(url) {
     const u = new URL(url);
     if (u.hostname !== 'libraries.cgr.dev') return '';
     if (u.pathname.startsWith('/javascript-upstream/')) {
-      return `<span class="cgr-badge cgr-upstream" title="Chainguard cache, 7 day cooldown &amp; Malware scanned">\u2191 upstream</span>`;
+      return `<span class="cgr-badge cgr-upstream" title="Chainguard cache, 7 day cooldown &amp; Malware scanned">\u2191 Chainguard Secure Mirror</span>`;
     }
     if (u.pathname.startsWith('/javascript/')) {
-      return `<span class="cgr-badge cgr-secured" title="Chainguard Built">&#128274; secured</span>`;
+      return `<span class="cgr-badge cgr-secured" title="Chainguard Built">&#128274; Built by Chainguard</span>`;
     }
   } catch {}
   return '';
@@ -1098,12 +1098,15 @@ function renderStats() {
     const withUrl = entries.filter(e => e.resolved).length;
     const withLic = entries.filter(e => e.license).length;
     const cgr = cgrCounts(entries);
+    const cgrTotal = cgr.secured + cgr.upstream;
+    const securedPct = cgrTotal > 0 ? Math.round(cgr.secured / cgrTotal * 100) : 0;
+    const upstreamPct = cgrTotal > 0 ? (100 - securedPct) : 0;
     bar.innerHTML = `
       <div class="stat-item"><div class="stat-value">${entries.length.toLocaleString()}</div><div class="stat-label">Packages</div></div>
       <div class="stat-item"><div class="stat-value blue">${withUrl.toLocaleString()}</div><div class="stat-label">With Resolved URL</div></div>
       <div class="stat-item"><div class="stat-value purple">${withLic.toLocaleString()}</div><div class="stat-label">With License</div></div>
-      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()}</div><div class="stat-label">CG Secured</div></div>
-      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()}</div><div class="stat-label">CG Upstream</div></div>
+      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()} <span style="font-size:13px;opacity:0.7">(${securedPct}%)</span></div><div class="stat-label">Built by Chainguard</div></div>
+      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()} <span style="font-size:13px;opacity:0.7">(${upstreamPct}%)</span></div><div class="stat-label">Chainguard Secure Mirror</div></div>
       <div class="stat-item"><div class="stat-value" style="font-size:14px">${formatLockfileVersion(state.fileA.parsed.lockfileVersion)}</div><div class="stat-label">Lockfile Format</div></div>`;
   } else {
     const c = state.comparison;
@@ -1111,14 +1114,17 @@ function renderStats() {
     const overlap = total > 0 ? Math.round((c.same.length + c.diff.length) / total * 100) : 0;
     const allB = [...state.fileB.parsed.map.values()];
     const cgr = cgrCounts(allB);
+    const cgrTotal = cgr.secured + cgr.upstream;
+    const securedPct = cgrTotal > 0 ? Math.round(cgr.secured / cgrTotal * 100) : 0;
+    const upstreamPct = cgrTotal > 0 ? (100 - securedPct) : 0;
     bar.innerHTML = `
       <div class="stat-item"><div class="stat-value red">${c.onlyA.length.toLocaleString()}</div><div class="stat-label">Only in ${esc(labelA())}</div></div>
       <div class="stat-item"><div class="stat-value green">${c.onlyB.length.toLocaleString()}</div><div class="stat-label">Only in ${esc(labelB())}</div></div>
       <div class="stat-item"><div class="stat-value blue">${c.same.length.toLocaleString()}</div><div class="stat-label">Same Version</div></div>
       <div class="stat-item"><div class="stat-value amber">${c.diff.length.toLocaleString()}</div><div class="stat-label">Version Changed</div></div>
       <div class="stat-item"><div class="stat-value">${overlap}%</div><div class="stat-label">Package Overlap</div></div>
-      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()}</div><div class="stat-label">CG Secured</div></div>
-      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()}</div><div class="stat-label">CG Upstream</div></div>`;
+      <div class="stat-item"><div class="stat-value green">&#128274; ${cgr.secured.toLocaleString()} <span style="font-size:13px;opacity:0.7">(${securedPct}%)</span></div><div class="stat-label">Built by Chainguard</div></div>
+      <div class="stat-item"><div class="stat-value" style="color:var(--accent-purple)">&uarr; ${cgr.upstream.toLocaleString()} <span style="font-size:13px;opacity:0.7">(${upstreamPct}%)</span></div><div class="stat-label">Chainguard Secure Mirror</div></div>`;
   }
 }
 
