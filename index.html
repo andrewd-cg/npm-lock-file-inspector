@@ -467,7 +467,7 @@
     <div class="header-icon">🔍</div>
     <div>
       <h1>npm Lock File Inspector</h1>
-      <p>Upload a lock file from <strong>npmjs</strong> and one from <strong>Chainguard</strong> to inspect and compare dependencies &mdash; supports package-lock.json and yarn.lock</p>
+      <p>Upload a lock file from <strong>npmjs</strong> and one from <strong>Chainguard</strong> to inspect and compare dependencies &mdash; supports package-lock.json, yarn.lock, and pnpm-lock.yaml</p>
     </div>
   </div>
 
@@ -475,19 +475,19 @@
   <div class="upload-section">
     <div class="upload-grid" id="upload-grid">
       <div class="drop-zone" id="drop-a" ondragover="handleDragOver(event,'a')" ondragleave="handleDragLeave(event,'a')" ondrop="handleDrop(event,'a')">
-        <input type="file" accept=".json,.lock,application/json" onchange="handleFileInput(event,'a')">
+        <input type="file" accept=".json,.lock,.yaml,.yml,application/json" onchange="handleFileInput(event,'a')">
         <div id="drop-a-content">
           <div class="drop-zone-icon">📦</div>
           <div class="drop-zone-label">Drop your <strong>npmjs</strong> lock file here</div>
-          <div class="drop-zone-sub">Supports package-lock.json and yarn.lock &mdash; packages assumed to resolve from registry.npmjs.org</div>
+          <div class="drop-zone-sub">Supports package-lock.json, yarn.lock, and pnpm-lock.yaml &mdash; packages assumed to resolve from registry.npmjs.org</div>
         </div>
       </div>
       <div class="drop-zone" id="drop-b" ondragover="handleDragOver(event,'b')" ondragleave="handleDragLeave(event,'b')" ondrop="handleDrop(event,'b')">
-        <input type="file" accept=".json,.lock,application/json" onchange="handleFileInput(event,'b')">
+        <input type="file" accept=".json,.lock,.yaml,.yml,application/json" onchange="handleFileInput(event,'b')">
         <div id="drop-b-content">
           <div class="drop-zone-icon">🔗</div>
           <div class="drop-zone-label">Drop your <strong>Chainguard</strong> lock file here</div>
-          <div class="drop-zone-sub">package-lock.json or yarn.lock &mdash; packages assumed to resolve from libraries.cgr.dev</div>
+          <div class="drop-zone-sub">package-lock.json, yarn.lock, or pnpm-lock.yaml &mdash; packages assumed to resolve from libraries.cgr.dev</div>
         </div>
       </div>
     </div>
@@ -561,7 +561,8 @@ function detectFormat(text) {
   if (t.startsWith('{')) return 'package-lock';
   if (t.startsWith('# yarn lockfile v1')) return 'yarn-v1';
   if (/^__metadata:/m.test(t)) return 'yarn-berry';
-  throw new Error('Unrecognized lock file format. Expected package-lock.json or yarn.lock.');
+  if (/^lockfileVersion:\s*['"]?[\d.]/m.test(t)) return 'pnpm';
+  throw new Error('Unrecognized lock file format. Expected package-lock.json, yarn.lock, or pnpm-lock.yaml.');
 }
 
 function extractNameFromPath(path) {
@@ -576,6 +577,7 @@ function parseLockfile(text, defaultRegistry) {
   const fmt = detectFormat(text);
   if (fmt === 'yarn-v1') return parseYarnV1(text);
   if (fmt === 'yarn-berry') return parseYarnBerry(text, defaultRegistry);
+  if (fmt === 'pnpm') return parsePnpmLock(text, defaultRegistry);
 
   let data;
   try {
@@ -710,6 +712,106 @@ function parseYarnBerry(text, defaultRegistry) {
   return { map, lockfileVersion: 'yarn-berry' };
 }
 
+// ─── pnpm parser ─────────────────────────────────────────────────────────────
+// Handles pnpm-lock.yaml v5/v6 (keys begin with "/") and v9+ (no leading "/").
+function parsePnpmLock(text, defaultRegistry) {
+  const map = new Map();
+  const lines = text.split('\n');
+
+  let pnpmVer = '';
+  for (const line of lines.slice(0, 30)) {
+    const m = line.match(/^lockfileVersion:\s*['"]?([\d.]+)['"]?/);
+    if (m) { pnpmVer = m[1]; break; }
+  }
+
+  // Locate the top-level `packages:` section
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^packages:\s*$/.test(lines[i])) { start = i + 1; break; }
+  }
+  if (start === -1) {
+    return { map, lockfileVersion: pnpmVer ? `pnpm v${pnpmVer}` : 'pnpm' };
+  }
+
+  let curKey = null;
+  let curMeta = {};
+
+  const reg = (defaultRegistry && defaultRegistry.endsWith('/')) ? defaultRegistry : (defaultRegistry || 'https://registry.npmjs.org/') + (defaultRegistry && !defaultRegistry.endsWith('/') ? '/' : '');
+
+  function commit() {
+    if (!curKey) return;
+    let key = curKey.trim();
+    // Strip surrounding YAML quotes (pnpm v9 quotes scoped keys: '@scope/pkg@1.0.0')
+    if ((key.startsWith("'") && key.endsWith("'")) || (key.startsWith('"') && key.endsWith('"'))) {
+      key = key.slice(1, -1);
+    }
+    if (key.startsWith('/')) key = key.slice(1);
+    // Strip peer-dep suffix: pkg@1.0.0(peer@2.0.0) → pkg@1.0.0
+    const paren = key.indexOf('(');
+    if (paren > 0) key = key.slice(0, paren);
+
+    const at = key.lastIndexOf('@');
+    if (at > 0) {
+      const name = key.slice(0, at);
+      const version = key.slice(at + 1);
+      if (name && version) {
+        const mapKey = name + '@' + version;
+        if (!map.has(mapKey)) {
+          let resolved = curMeta.tarball || '';
+          if (!resolved) {
+            const basename = name.includes('/') ? name.split('/').pop() : name;
+            resolved = `${reg}${name}/-/${basename}-${version}.tgz`;
+          }
+          map.set(mapKey, {
+            name,
+            version,
+            resolved,
+            license: null,
+            integrity: curMeta.integrity || '',
+          });
+        }
+      }
+    }
+    curKey = null;
+    curMeta = {};
+  }
+
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Top-level key (no indent, ends with ':') ends the packages section
+    if (line.length > 0 && !/^\s/.test(line) && /:\s*$/.test(line)) {
+      commit();
+      break;
+    }
+
+    if (!line.trim()) continue;
+
+    // Package entry: exactly 2-space indent, ends with ':'
+    const pkg = line.match(/^  ([^\s].*?):\s*$/);
+    if (pkg) {
+      commit();
+      curKey = pkg[1];
+      continue;
+    }
+
+    // Sub-fields under a package (4+ space indent)
+    if (curKey && /^    /.test(line)) {
+      const res = line.match(/^\s+resolution:\s*\{(.+)\}\s*$/);
+      if (res) {
+        const inner = res[1];
+        const intM = inner.match(/integrity:\s*([^,}\s]+)/);
+        const tarM = inner.match(/tarball:\s*([^,}\s]+)/);
+        if (intM) curMeta.integrity = intM[1];
+        if (tarM) curMeta.tarball = tarM[1];
+      }
+    }
+  }
+  commit();
+
+  return { map, lockfileVersion: pnpmVer ? `pnpm v${pnpmVer}` : 'pnpm' };
+}
+
 function parsePackagesBlock(packages, lv) {
   const map = new Map();
   for (const [path, meta] of Object.entries(packages)) {
@@ -757,6 +859,7 @@ function parseDependenciesBlock(deps, result = new Map()) {
 function formatLockfileVersion(v) {
   if (v === 'yarn-v1') return 'Yarn v1';
   if (v === 'yarn-berry') return 'Yarn Berry';
+  if (typeof v === 'string' && v.startsWith('pnpm')) return v;
   return `npm v${v}`;
 }
 
@@ -1061,12 +1164,12 @@ function renderUploadZones() {
       contentB.innerHTML = `
         <div class="drop-zone-icon">🔗</div>
         <div class="drop-zone-label">Now drop your <strong>Chainguard</strong> lock file</div>
-        <div class="drop-zone-sub">package-lock.json or yarn.lock &mdash; packages assumed to resolve from libraries.cgr.dev</div>`;
+        <div class="drop-zone-sub">package-lock.json, yarn.lock, or pnpm-lock.yaml &mdash; packages assumed to resolve from libraries.cgr.dev</div>`;
     } else {
       contentB.innerHTML = `
         <div class="drop-zone-icon">🔗</div>
         <div class="drop-zone-label">Drop your <strong>Chainguard</strong> lock file here</div>
-        <div class="drop-zone-sub">package-lock.json or yarn.lock &mdash; packages assumed to resolve from libraries.cgr.dev</div>`;
+        <div class="drop-zone-sub">package-lock.json, yarn.lock, or pnpm-lock.yaml &mdash; packages assumed to resolve from libraries.cgr.dev</div>`;
     }
   }
 }
