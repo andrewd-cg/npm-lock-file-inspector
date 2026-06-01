@@ -343,6 +343,18 @@
   }
   .pkg-license.no-license { background: transparent; color: var(--text-muted); font-weight: 400; }
 
+  /* Package age */
+  .pkg-age {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .pkg-age.age-pending { opacity: 0.45; }
+  .pkg-age.age-fresh { color: var(--accent-green); }
+  .pkg-age.age-mid { color: var(--accent-amber); }
+  .pkg-age.age-old { color: var(--accent-red); }
+
   /* Diff row styles */
   tr.only-a { background: var(--row-only-a); }
   tr.only-b { background: var(--row-only-b); }
@@ -550,6 +562,8 @@ const state = {
   comparison: null,   // { onlyA, onlyB, same, diff }
   filter: '',
   sortKey: 'name',
+  // sortKey may also be 'published' once ages are fetched
+
   sortDir: 'asc',
   activeTab: 'all',   // 'all' | 'onlyA' | 'onlyB' | 'same' | 'diff'
   loading: false,
@@ -977,6 +991,7 @@ function loadFile(file, slot) {
         state.sortDir = 'asc';
         state.loading = false;
         render();
+        fetchAges(); // fire-and-forget; fills the Age column progressively
       } catch (err) {
         state.loading = false;
         renderSpinner(false);
@@ -1034,17 +1049,30 @@ function handleTabChange(tab) {
   render();
 }
 
+function pubMs(entry) {
+  const v = ageCache.get(entry.name + '@' + entry.version);
+  return v ? Date.parse(v) : null;
+}
+
+function compareEntry(a, b, key, dir) {
+  if (key === 'published') {
+    const ma = pubMs(a), mb = pubMs(b);
+    // Unknown dates always sink to the bottom, regardless of direction.
+    if (ma === null && mb === null) return 0;
+    if (ma === null) return 1;
+    if (mb === null) return -1;
+    return dir === 'asc' ? ma - mb : mb - ma;
+  }
+  if (key === 'version') {
+    const cv = compareSemver(a.version || '', b.version || '');
+    return dir === 'asc' ? cv : -cv;
+  }
+  const r = String(a[key] || '').localeCompare(String(b[key] || ''));
+  return dir === 'asc' ? r : -r;
+}
+
 function sortEntries(entries, key, dir) {
-  return [...entries].sort((a, b) => {
-    let va = a[key] || '';
-    let vb = b[key] || '';
-    if (key === 'version') {
-      const cv = compareSemver(va, vb);
-      return dir === 'asc' ? cv : -cv;
-    }
-    const r = String(va).localeCompare(String(vb));
-    return dir === 'asc' ? r : -r;
-  });
+  return [...entries].sort((a, b) => compareEntry(a, b, key, dir));
 }
 
 // ─── Render helpers ───────────────────────────────────────────────────────────
@@ -1098,6 +1126,108 @@ function shortUrl(url) {
     const u = new URL(url);
     return u.hostname + u.pathname;
   } catch { return url; }
+}
+
+// ─── Package age (publish dates from registry.npmjs.org) ───────────────────────
+// ageCache: "name@version" → ISO date string (published), or null if unknown/missing.
+//           Absent key = not yet fetched (renders as pending "…").
+const ageCache = new Map();
+const fetchedNames = new Set(); // package names already fetched or in-flight (dedup)
+
+function registryUrlName(name) {
+  // Scoped packages must have the '/' encoded; unscoped names are URL-safe.
+  return name.startsWith('@') ? name.replace('/', '%2F') : name;
+}
+
+function formatAge(iso) {
+  const then = Date.parse(iso);
+  if (isNaN(then)) return '—';
+  const days = Math.max(0, (Date.now() - then) / 86400000);
+  if (days < 1) return 'today';
+  if (days < 30) return `${Math.floor(days)}d`;
+  if (days < 365) return `${Math.floor(days / 30.44)}mo`;
+  const years = days / 365.25;
+  const y = Math.floor(years);
+  const mo = Math.floor((years - y) * 12);
+  return mo > 0 ? `${y}y ${mo}mo` : `${y}y`;
+}
+
+function ageColorClass(iso) {
+  const days = (Date.now() - Date.parse(iso)) / 86400000;
+  if (days > 365 * 4) return 'age-old';
+  if (days > 365 * 2) return 'age-mid';
+  if (days < 30) return 'age-fresh';
+  return '';
+}
+
+// Full <span> for an age cell, keyed so it can be updated in place once fetched.
+function ageHtml(key) {
+  const v = ageCache.get(key);
+  if (v === undefined) {
+    return `<span class="pkg-age age-pending" data-age-key="${esc(key)}" title="Fetching publish date…">…</span>`;
+  }
+  if (!v) {
+    return `<span class="pkg-age" data-age-key="${esc(key)}" title="Publish date unavailable">—</span>`;
+  }
+  const d = new Date(v);
+  return `<span class="pkg-age ${ageColorClass(v)}" data-age-key="${esc(key)}" title="Published ${esc(d.toLocaleDateString())}">${esc(formatAge(v))}</span>`;
+}
+
+function ageCell(name, version) {
+  return ageHtml(name + '@' + version);
+}
+
+// Patch any rendered cells for these keys without a full table re-render.
+function updateAgeCells(keys) {
+  for (const key of keys) {
+    document.querySelectorAll(`[data-age-key="${key}"]`).forEach(el => {
+      el.outerHTML = ageHtml(key);
+    });
+  }
+}
+
+// Fetch publish dates for every package across both loaded files.
+// One request per package NAME (covers all its versions), capped concurrency.
+async function fetchAges() {
+  const names = new Map(); // name → Set(versions present in our files)
+  const collect = (parsed) => {
+    if (!parsed) return;
+    for (const e of parsed.map.values()) {
+      if (!names.has(e.name)) names.set(e.name, new Set());
+      names.get(e.name).add(e.version);
+    }
+  };
+  collect(state.fileA?.parsed);
+  collect(state.fileB?.parsed);
+
+  const todo = [...names.keys()].filter(n => !fetchedNames.has(n));
+  if (todo.length === 0) return;
+
+  let idx = 0;
+  const CONCURRENCY = 15;
+  async function worker() {
+    while (idx < todo.length) {
+      const name = todo[idx++];
+      fetchedNames.add(name);
+      let timeObj = null;
+      try {
+        const res = await fetch(`https://registry.npmjs.org/${registryUrlName(name)}`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (res.ok) timeObj = (await res.json()).time || {};
+        // On 429 / 4xx / 5xx, timeObj stays null → versions render as "—".
+      } catch { /* network error → unknown */ }
+
+      const keys = [];
+      for (const v of names.get(name)) {
+        const key = name + '@' + v;
+        ageCache.set(key, (timeObj && timeObj[v]) ? timeObj[v] : null);
+        keys.push(key);
+      }
+      updateAgeCells(keys);
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 }
 
 function sortArrow(key) {
@@ -1279,21 +1409,12 @@ function getVisibleEntries() {
   }
   if (tab === 'same') {
     let pairs = f ? c.same.filter(p => p.a.name.toLowerCase().includes(f)) : c.same;
-    pairs = [...pairs].sort((x, y) => {
-      const r = x.a.name.localeCompare(y.a.name);
-      return state.sortDir === 'asc' ? r : -r;
-    });
+    pairs = [...pairs].sort((x, y) => compareEntry(x.a, y.a, state.sortKey, state.sortDir));
     return { type: 'same', pairs };
   }
   if (tab === 'diff') {
     let pairs = f ? c.diff.filter(p => (p.a || p.b).name.toLowerCase().includes(f)) : c.diff;
-    pairs = [...pairs].sort((x, y) => {
-      const ex = x.a || x.b, ey = y.a || y.b;
-      let va = state.sortKey === 'version' ? ex.version : ex[state.sortKey] || '';
-      let vb = state.sortKey === 'version' ? ey.version : ey[state.sortKey] || '';
-      const r = String(va).localeCompare(String(vb));
-      return state.sortDir === 'asc' ? r : -r;
-    });
+    pairs = [...pairs].sort((x, y) => compareEntry(x.a || x.b, y.a || y.b, state.sortKey, state.sortDir));
     return { type: 'diff', pairs };
   }
   // all
@@ -1329,6 +1450,7 @@ function renderTable() {
   const commonCols = `
     <th onclick="handleSort('name')">Package Name ${sortArrow('name')}</th>
     <th onclick="handleSort('version')">Version ${sortArrow('version')}</th>
+    <th onclick="handleSort('published')">Age ${sortArrow('published')}</th>
     <th onclick="handleSort('resolved')">Resolved URL ${sortArrow('resolved')}</th>
     <th onclick="handleSort('license')">License ${sortArrow('license')}</th>`;
 
@@ -1336,6 +1458,7 @@ function renderTable() {
     thead.innerHTML = `<tr>
       <th onclick="handleSort('name')">Package Name ${sortArrow('name')}</th>
       <th>${esc(labelA())} Version</th>
+      <th>${esc(labelA())} Age</th>
       <th>${esc(labelB())} Version</th>
       <th>${esc(labelA())} Resolved</th>
       <th>${esc(labelB())} Resolved</th>
@@ -1345,6 +1468,7 @@ function renderTable() {
     thead.innerHTML = `<tr>
       <th onclick="handleSort('name')">Package Name ${sortArrow('name')}</th>
       <th onclick="handleSort('version')">Version ${sortArrow('version')}</th>
+      <th onclick="handleSort('published')">Age ${sortArrow('published')}</th>
       <th>${esc(labelA())} Resolved</th>
       <th>${esc(labelB())} Resolved</th>
       <th>License</th>
@@ -1353,6 +1477,7 @@ function renderTable() {
     thead.innerHTML = `<tr>
       <th onclick="handleSort('name')">Package Name ${sortArrow('name')}</th>
       <th onclick="handleSort('version')">Version</th>
+      <th onclick="handleSort('published')">Age ${sortArrow('published')}</th>
       <th>Status</th>
       <th onclick="handleSort('resolved')">Resolved URL ${sortArrow('resolved')}</th>
       <th onclick="handleSort('license')">License ${sortArrow('license')}</th>
@@ -1375,6 +1500,7 @@ function renderTable() {
       <tr class="diff">
         <td>${pkgLink(name)}</td>
         <td>${p.a ? `<span class="diff-version-a">${esc(p.a.version)}</span>` : `<span class="diff-version-same">—</span>`}</td>
+        <td>${p.a ? ageCell(p.a.name, p.a.version) : '—'}</td>
         <td>${p.b ? `<span class="diff-version-b">${esc(p.b.version)}</span>` : `<span class="diff-version-same">—</span>`}</td>
         <td>${p.a ? urlCell(p.a.resolved, shortUrl(p.a.resolved)) : '—'}</td>
         <td>${p.b ? urlCell(p.b.resolved, shortUrl(p.b.resolved)) : '—'}</td>
@@ -1388,6 +1514,7 @@ function renderTable() {
       <tr class="same">
         <td>${pkgLink(p.a.name)}</td>
         <td><span class="diff-version-same">${esc(p.a.version)}</span></td>
+        <td>${ageCell(p.a.name, p.a.version)}</td>
         <td>${urlCell(p.a.resolved, shortUrl(p.a.resolved))}</td>
         <td>${urlCell(p.b.resolved, shortUrl(p.b.resolved))}</td>
         <td>${licenseTag(p.a.license || p.b.license)}</td>
@@ -1406,6 +1533,7 @@ function renderTable() {
         <tr class="${cat}">
           <td>${pkgLink(e.name)}</td>
           <td><span class="pkg-version">${esc(e.version)}</span></td>
+          <td>${ageCell(e.name, e.version)}</td>
           <td>${statusMap[cat] || ''}</td>
           <td>${urlCell(e.resolved, shortUrl(e.resolved))}</td>
           <td>${licenseTag(e.license)}</td>
@@ -1417,6 +1545,7 @@ function renderTable() {
       <tr>
         <td>${pkgLink(e.name)}</td>
         <td><span class="pkg-version">${esc(e.version)}</span></td>
+        <td>${ageCell(e.name, e.version)}</td>
         <td>${urlCell(e.resolved, shortUrl(e.resolved))}</td>
         <td>${licenseTag(e.license)}</td>
       </tr>`).join('');
@@ -1459,6 +1588,7 @@ function exportHTML() {
       lockfileVersion: state.fileB.parsed.lockfileVersion,
       entries: [...state.fileB.parsed.map.entries()],
     } : null,
+    ages: [...ageCache.entries()], // cache publish dates so snapshots work offline
   };
 
   const injection = `<script>window.__PRELOADED_STATE__=${JSON.stringify(preload)};<\/script>`;
@@ -1478,6 +1608,10 @@ function exportHTML() {
 if (window.__PRELOADED_STATE__) {
   const ps = window.__PRELOADED_STATE__;
 
+  if (Array.isArray(ps.ages)) {
+    for (const [k, v] of ps.ages) ageCache.set(k, v);
+  }
+
   function restoreFile(f) {
     if (!f) return null;
     const map = new Map(f.entries);
@@ -1494,6 +1628,21 @@ if (window.__PRELOADED_STATE__) {
   } else if (state.fileA) {
     state.mode = 'single';
   }
+
+  // Mark names whose every version is already cached as "fetched" so opening a
+  // complete snapshot makes zero network requests; only gaps are filled.
+  const verByName = new Map();
+  for (const f of [state.fileA, state.fileB]) {
+    if (!f) continue;
+    for (const e of f.parsed.map.values()) {
+      if (!verByName.has(e.name)) verByName.set(e.name, new Set());
+      verByName.get(e.name).add(e.version);
+    }
+  }
+  for (const [name, vers] of verByName) {
+    if ([...vers].every(v => ageCache.has(name + '@' + v))) fetchedNames.add(name);
+  }
+  fetchAges(); // no-op if the snapshot was complete
 
   // Hide upload section, show snapshot banner
   document.getElementById('upload-grid').closest('.upload-section').style.display = 'none';
